@@ -2,12 +2,19 @@
   "manifest_version": 3,
   "name": "Bulk Attachments pour Gmail",
   "short_name": "Bulk Attachments",
-  "version": "1.0.0",
-  "description": "Télécharge en masse les pièces jointes de vos e-mails Gmail, en ZIP ou en fichiers séparés.",
+  "version": "1.1.0",
+  "description": "Télécharge en masse les pièces jointes des e-mails sélectionnés dans Gmail, en ZIP ou en fichiers séparés.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtZy9rFlWlPzgFqQSyR3cggdmgdqMGJi2Mt10SdoBEm/hcrGP7GNq0aHMeiqQ9YrGnafNGZUEzUgq/F5njiJdUd1PK50qKyzIbB+rEuExc8bV8codMtPjtBP9sl+fMkjOCSv7NzMLcPmsaVJv6j8MBGq3cK5V2mFg9ZJYwWaqcdH1RyG8g94JGpQw6yb4vHUnBO4kMZS9G5KZTdRMC2go4/NvA6OAfG5lBkOyesSvTGgq+z40dcoQJhDAQL4qCHXA4mBYRyWPhCnKzziB3RPqHtObYHszAKfOD0W3UuwZnF/sskuviKkCgS+Zq+qRTFafE1VMORchg1EsDbFmZqXjMwIDAQAB",
   "minimum_chrome_version": "116",
-  "permissions": ["identity", "downloads", "storage", "activeTab"],
+  "permissions": [
+    "identity",
+    "downloads",
+    "storage",
+    "scripting",
+    "offscreen"
+  ],
   "host_permissions": [
+    "https://mail.google.com/*",
     "https://gmail.googleapis.com/*",
     "https://oauth2.googleapis.com/*"
   ],
@@ -21,7 +28,8 @@
     "service_worker": "background.js"
   },
   "action": {
-    "default_title": "Télécharger les pièces jointes Gmail",
+    "default_title": "Télécharger les pièces jointes des e-mails sélectionnés",
+    "default_popup": "popup.html",
     "default_icon": {
       "16": "icons/icon16.png",
       "32": "icons/icon32.png",

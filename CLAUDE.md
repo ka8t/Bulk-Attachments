@@ -32,5 +32,7 @@ S'applique à l'interface, à la documentation, aux commentaires et aux messages
   rm -rf node_modules   # Chrome charge tout le dossier de l'extension
   ```
   Toute nouvelle fonctionnalité de l'interface ajoute ses vérifications dans `tests/e2e.mjs`.
-- **Automatisation du navigateur** : Claude in Chrome ne peut pas piloter les pages `chrome://` ni `chrome-extension://`. Le test réel sur Gmail se fait par l'utilisateur ; vérifier ensuite les fichiers produits dans `~/Downloads`.
+- **Architecture** : popup (`popup.js`) → moteur hors écran (`offscreen.js`, survit à la fermeture de la popup) → service d'arrière-plan (`background.js`, seul à avoir `chrome.identity` et `chrome.downloads`). Pas de nouvel onglet : l'utilisateur travaille depuis sa page Gmail.
+- **DOM de Gmail** : la sélection est lue par `readGmailSelection` (`lib/gmail.js`), fonction injectée qui doit rester autonome. Repères relevés sur Gmail : `tr.zA`, `[role=checkbox][aria-checked]`, `[data-legacy-thread-id]` (= threadId de l'API), `h2.hP` pour une conversation ouverte. Toute évolution de ces repères se reporte aussi dans la fausse page Gmail de `tests/e2e.mjs`.
+- **Automatisation du navigateur** : Claude in Chrome ne peut pas piloter les pages `chrome://` ni `chrome-extension://` ; le test de la vraie extension passe par `tests/e2e.mjs`. Sur le vrai Gmail de l'utilisateur : lecture de la structure uniquement, de préférence par JavaScript ; éviter de cliquer dans la liste (un clic décalé ouvre un e-mail et le marque comme lu) et remettre la sélection à zéro après tout essai.
 - **Langue** : interface et documentation en français.

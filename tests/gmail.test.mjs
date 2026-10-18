@@ -5,12 +5,12 @@ import {
   PathAllocator,
   b64urlToBytes,
   buildPath,
-  buildQuery,
   extractAttachments,
-  localDayToEpoch,
+  labelToken,
   parseExtensions,
   parseSender,
   pool,
+  queryFromGmailHash,
   sanitize,
   toCsv,
 } from '../lib/gmail.js';
@@ -80,13 +80,30 @@ test('parseSender gère les formats courants', () => {
   assert.deepEqual(parseSender('<nu@x.fr>'), { name: 'nu@x.fr', email: 'nu@x.fr' });
 });
 
-test('buildQuery assemble les filtres avec des dates inclusives en heure locale', () => {
-  const q = buildQuery({ from: 'a@b.fr', after: '2024-01-01', before: '2024-01-31', extensions: '.pdf, docx', minSizeMB: 2 });
+test('queryFromGmailHash traduit la vue Gmail en requête', () => {
+  // URL réelle de recherche avancée, avec et sans conversation ouverte
+  const adv = '#advanced-search/attach_or_drive=true&query=appels+de+fonds+after%3A2022%2F01%2F01&isrefinement=true';
+  assert.equal(queryFromGmailHash(adv), 'appels de fonds after:2022/01/01');
+  assert.equal(queryFromGmailHash(`${adv}/FMfcgzQXJWbN`), 'appels de fonds after:2022/01/01');
+  assert.equal(queryFromGmailHash('#search/from%3Aboss+facture/FMfcgz'), 'from:boss facture');
+  assert.equal(queryFromGmailHash('#inbox'), 'in:inbox');
+  assert.equal(queryFromGmailHash('#inbox/FMfcgz'), 'in:inbox');
+  assert.equal(queryFromGmailHash('#all'), '');
+  assert.equal(queryFromGmailHash('#label/Mes+Factures%2F2024'), 'label:mes-factures-2024');
+  assert.equal(queryFromGmailHash('#category/promotions'), 'category:promotions');
+  assert.equal(queryFromGmailHash(''), '');
   assert.equal(
-    q,
-    `has:attachment from:(a@b.fr) after:${localDayToEpoch('2024-01-01')} before:${localDayToEpoch('2024-02-01')} {filename:pdf filename:docx} larger:2M`,
+    queryFromGmailHash('#advanced-search/from=a%40b.fr&subject=devis&hasnot=spam&subset=unread&sizeoperator=s_sl&size=2&sizeunit=s_smb'),
+    'from:(a@b.fr) subject:(devis) -{spam} is:unread larger:2M',
   );
-  assert.equal(buildQuery({}), 'has:attachment');
+  assert.equal(
+    queryFromGmailHash('#advanced-search/query=x&within=1w&date=2024%2F03%2F15'),
+    'x after:2024/3/8 before:2024/3/23',
+  );
+});
+
+test('labelToken suit la syntaxe de recherche Gmail', () => {
+  assert.equal(labelToken('Clients/Dupont & Fils'), 'clients-dupont-fils');
 });
 
 test('parseExtensions normalise la saisie', () => {

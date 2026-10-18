@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <title>Bulk Attachments</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header>
+    <img src="icons/icon32.png" alt="" width="20" height="20">
+    <h1>Bulk Attachments</h1>
+    <span id="account" class="muted"></span>
+  </header>
+
+  <main>
+    <p id="warning" class="banner warn" hidden></p>
+    <p id="error" class="banner error" hidden></p>
+
+    <section id="notGmail" hidden>
+      <p>Ouvrez Gmail, cochez les e-mails voulus, puis cliquez à nouveau sur l'icône de l'extension.</p>
+      <button id="btnOpenGmail" class="btn primary" type="button">Ouvrir Gmail</button>
+    </section>
+
+    <section id="auth" hidden>
+      <p>L'extension doit être autorisée à lire vos e-mails (lecture seule).</p>
+      <button id="btnConnect" class="btn primary" type="button">Se connecter à Gmail</button>
+      <p class="muted small">Google peut afficher « Google n'a pas validé cette application » : cliquez sur Continuer. Si la fenêtre se ferme, rouvrez l'extension.</p>
+    </section>
+
+    <section id="source" hidden>
+      <div class="source-line">
+        <div>
+          <strong id="sourceTitle"></strong>
+          <div id="sourceDetail" class="muted small"></div>
+        </div>
+        <button id="btnScan" class="btn" type="button">Analyser</button>
+      </div>
+    </section>
+
+    <section id="list" hidden>
+      <div class="list-head">
+        <label class="check"><input id="checkAll" type="checkbox"> <span id="stats"></span></label>
+        <input id="filterText" type="search" placeholder="Filtrer…">
+      </div>
+      <ul id="rows"></ul>
+      <p id="truncated" class="muted small" hidden></p>
+    </section>
+
+    <details id="options">
+      <summary>Options</summary>
+      <form id="optionsForm" class="options">
+        <fieldset>
+          <legend>Téléchargement</legend>
+          <label>Format
+            <select name="format">
+              <option value="zip">Archive ZIP</option>
+              <option value="files">Fichiers séparés</option>
+            </select>
+          </label>
+          <label>Dossiers
+            <select name="folderMode">
+              <option value="none">Aucun dossier</option>
+              <option value="sender">Par adresse de l'expéditeur</option>
+              <option value="senderName">Par nom de l'expéditeur</option>
+              <option value="month">Par mois (AAAA-MM)</option>
+              <option value="date">Par jour (AAAA-MM-JJ)</option>
+              <option value="type">Par type de fichier</option>
+              <option value="email">Un dossier par e-mail</option>
+            </select>
+          </label>
+          <label>Nom des fichiers
+            <select name="fileMode">
+              <option value="original">Nom d'origine</option>
+              <option value="date">Date + nom d'origine</option>
+              <option value="sender">Expéditeur + nom d'origine</option>
+              <option value="dateSender">Date + expéditeur + nom d'origine</option>
+            </select>
+          </label>
+          <label>Nom de l'archive ou du dossier
+            <input name="baseName" type="text" placeholder="Gmail-pieces-jointes_date">
+          </label>
+          <label data-zip>Taille maximale par ZIP (Mo)
+            <input name="maxZipMB" type="number" min="50" step="50" value="1000">
+          </label>
+          <label class="check" data-zip><input name="compress" type="checkbox"> Compresser (plus lent)</label>
+          <label class="check"><input name="includeIndex" type="checkbox" checked> Ajouter un index CSV</label>
+        </fieldset>
+        <fieldset>
+          <legend>Analyse</legend>
+          <label class="check"><input name="skipDuplicates" type="checkbox" checked> Décocher les doublons (même nom, même taille)</label>
+          <label class="check"><input name="includeInline" type="checkbox"> Inclure les images intégrées (logos, signatures)</label>
+          <label>Extensions à garder
+            <input name="extensions" type="text" placeholder="pdf, docx (vide = toutes)">
+          </label>
+          <label>Nombre maximal d'e-mails (recherche entière)
+            <input name="max" type="number" min="1" step="1" value="500">
+          </label>
+        </fieldset>
+      </form>
+    </details>
+
+    <section id="progress" hidden>
+      <div class="progress-text">
+        <span id="progressLabel">…</span>
+        <button id="btnCancel" class="btn small" type="button">Annuler</button>
+      </div>
+      <div class="track"><div id="progressFill" class="fill"></div></div>
+      <p class="muted small">Vous pouvez fermer cette fenêtre : le travail continue, avec la progression sur l'icône de l'extension.</p>
+    </section>
+
+    <section id="result" class="banner ok" hidden></section>
+  </main>
+
+  <footer>
+    <button id="btnExport" class="btn ghost" type="button" hidden>Exporter la liste (CSV)</button>
+    <button id="btnDownload" class="btn primary" type="button" disabled>Télécharger</button>
+  </footer>
+  <div class="foot-links">
+    <button id="btnSignOut" class="link" type="button" hidden>Se déconnecter</button>
+  </div>
+
+  <script type="module" src="popup.js"></script>
+</body>
+</html>

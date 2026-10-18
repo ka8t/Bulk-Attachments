@@ -1,12 +1,18 @@
 # Bulk Attachments pour Gmail
 
-Extension Chrome (Manifest V3) qui télécharge en masse les pièces jointes de vos e-mails Gmail, sur le modèle de « Save Bulk Gmail Attachments ».
+Extension Chrome (Manifest V3) qui télécharge en masse les pièces jointes des e-mails sélectionnés dans Gmail, sur le modèle de « Save Bulk Gmail Attachments ».
 
 ## Fonctionnalités
 
-- Recherche par expéditeur, destinataire, objet, libellé, période, extensions de fichier, taille minimale, ou n'importe quelle requête Gmail avancée.
-- Reprise automatique de la recherche Gmail en cours : cliquez sur l'icône de l'extension depuis une page de recherche Gmail.
-- Liste des pièces jointes avant téléchargement : cases à cocher, filtre texte, lien vers l'e-mail d'origine.
+- Popup sur la page Gmail en cours, sans nouvel onglet : un clic sur l'icône lit ce qui est sélectionné dans Gmail.
+- Quatre cas reconnus :
+  - **E-mails cochés** dans la liste : toutes les pièces jointes de ces conversations, analysées dès l'ouverture.
+  - **Conversation ouverte** : ses pièces jointes, analysées dès l'ouverture.
+  - **« Sélectionner les N conversations correspondant à cette recherche »** : toute la recherche, relancée via l'API.
+  - **Rien de coché** : proposition d'analyser toute la vue (recherche, recherche avancée, libellé, boîte de réception…).
+- Liste des pièces jointes avant téléchargement : cases à cocher, filtre texte.
+- Le téléchargement continue si la popup se ferme ; la progression s'affiche sur l'icône de l'extension (pourcentage, puis « OK »).
+- Avertissement si le compte affiché dans Gmail diffère du compte autorisé par l'extension.
 - Doublons (même nom et même taille, typiquement un fichier transféré plusieurs fois) repérés et décochés.
 - Images intégrées (logos de signature) exclues par défaut.
 - Téléchargement en archive ZIP (découpée au-delà d'une taille maximale) ou en fichiers séparés.
@@ -75,35 +81,35 @@ Après toute modification d'un fichier de l'extension : bouton **Recharger** (fl
 
 ## Utilisation
 
-1. Cliquer sur l'icône de l'extension : l'application s'ouvre dans un onglet.
-2. **Se connecter** : Google affiche un avertissement « Google n'a pas validé cette application » (normal en statut « En test ») → **Continuer**, puis autoriser la lecture des e-mails.
-3. Remplir les filtres et cliquer sur **Rechercher**. La requête Gmail générée s'affiche à gauche du bouton.
-4. Cocher ou décocher les pièces jointes voulues.
-5. Choisir le format et l'organisation, puis **Télécharger la sélection**. Les fichiers arrivent dans le dossier de téléchargements de Chrome.
-
-Gardez l'onglet ouvert pendant le téléchargement ; le bouton **Annuler** de la barre de progression interrompt l'opération.
+1. Dans Gmail, cocher les e-mails voulus (ou ouvrir une conversation, ou faire une recherche).
+2. Cliquer sur l'icône de l'extension : la popup affiche la sélection et la liste des pièces jointes.
+3. Première fois : **Se connecter à Gmail**. Google affiche « Google n'a pas validé cette application » (normal en statut « En test ») → **Continuer**, puis autoriser la lecture. Si la popup se ferme pendant l'autorisation, la rouvrir.
+4. Décocher les pièces jointes inutiles ; régler format et rangement dans **Options** (réglages conservés).
+5. **Télécharger** : les fichiers arrivent dans le dossier de téléchargements de Chrome. La popup peut être fermée ; **Annuler** interrompt l'opération.
 
 ## Limites connues
 
-- **Compte utilisé** : `chrome.identity` utilise le compte Google connecté au profil Chrome. Pour traiter une autre boîte Gmail, ouvrez un autre profil Chrome connecté à ce compte et chargez-y l'extension (et ajoutez ce compte dans les utilisateurs test).
+- **Compte utilisé** : `chrome.identity` utilise le compte Google connecté au profil Chrome. Si Gmail affiche un autre compte (`/mail/u/1/`…), la popup le signale. Pour traiter une autre boîte Gmail, ouvrez un autre profil Chrome connecté à ce compte et chargez-y l'extension (et ajoutez ce compte dans les utilisateurs test).
+- **Lecture de la page Gmail** : la sélection est lue dans la structure de la page (`tr.zA`, `aria-checked`, `data-legacy-thread-id`). Si Google modifie cette structure, la détection devra être adaptée dans `readGmailSelection` (`lib/gmail.js`).
 - **Statut « En test »** : Google peut redemander votre autorisation environ tous les 7 jours. Cliquez simplement à nouveau sur **Se connecter**.
 - **Mémoire** : en mode ZIP, chaque archive est construite en mémoire avant d'être enregistrée. Gardez une taille maximale par ZIP raisonnable (1 000 Mo par défaut) ; pour de très gros volumes, préférez le mode « fichiers séparés ».
 - **Fichiers Google Drive** : les liens Drive insérés dans un e-mail ne sont pas des pièces jointes et ne sont pas téléchargés.
 - **Option Chrome « Demander dans quel dossier enregistrer chaque fichier »** : à désactiver (`chrome://settings/downloads`) avant un téléchargement en fichiers séparés, sinon Chrome ouvre une fenêtre par fichier.
-- **Taille minimale** : le filtre Gmail `larger:` porte sur la taille totale de l'e-mail, pas sur chaque pièce jointe.
+- **Recherche avancée** : les champs du formulaire de recherche avancée de Gmail sont traduits en requête (expéditeur, destinataire, objet, mots, exclusions, dossier, taille, période autour d'une date). Le filtre de taille de Gmail porte sur l'e-mail entier, pas sur chaque pièce jointe.
 
 ## Structure du projet
 
 | Fichier | Rôle |
 | --- | --- |
 | `manifest.json` | Déclaration de l'extension (permissions, OAuth, clé d'ID) |
-| `background.js` | Ouvre l'application au clic sur l'icône, avec la recherche Gmail en cours |
-| `app.html`, `app.css`, `app.js` | Interface : connexion, recherche, sélection, téléchargement |
-| `lib/gmail.js` | Client API Gmail et fonctions pures (requête, extraction, nommage) |
+| `popup.html`, `popup.css`, `popup.js` | Popup : lit la sélection de l'onglet Gmail, affiche les pièces jointes, pilote le moteur |
+| `offscreen.html`, `offscreen.js` | Moteur dans un document hors écran : analyse, construction des ZIP ; survit à la fermeture de la popup |
+| `background.js` | Service d'arrière-plan : jeton OAuth, téléchargements, badge de l'icône, création du moteur |
+| `lib/gmail.js` | Client API Gmail, lecture de la page Gmail, traduction de la vue en requête, extraction, nommage |
 | `lib/jszip.min.js` | JSZip 3.10.1 (licence MIT), création des archives ZIP |
 | `icons/` | Icônes de l'extension |
 | `tests/gmail.test.mjs` | Tests unitaires des fonctions pures : `npm test` |
-| `tests/e2e.mjs` | Test de bout en bout : la vraie page `app.html` dans Chrome headless, avec les API Chrome et Gmail simulées (29 vérifications : recherche, pagination, doublons, filtres, ZIP, découpage, fichiers séparés, index CSV, réglages, déconnexion) |
+| `tests/e2e.mjs` | Test de bout en bout de la vraie extension chargée dans Chrome headless : fausse page Gmail, API Gmail et jeton simulés, vrais téléchargements (31 vérifications : connexion, sélection cochée, conversation ouverte, toute la recherche, rien de coché, ZIP, découpage, fichiers séparés, popup fermée pendant le téléchargement, badge, compte différent, hors Gmail, déconnexion) |
 
 ## Tests
 

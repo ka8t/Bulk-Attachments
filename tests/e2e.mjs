@@ -1,10 +1,11 @@
-// Test de bout en bout : charge la vraie page app.html dans Chrome (headless),
-// avec les API chrome.* et Gmail simulées.
-// Lancer avec : npm install && npm run test:e2e   (nécessite Google Chrome installé)
-import http from 'node:http';
+// Test de bout en bout de la vraie extension, chargée dans Google Chrome (headless) :
+// fausse page Gmail (structure du DOM relevée sur Gmail), API Gmail simulée dans le
+// moteur hors écran, jeton OAuth simulé dans le service d'arrière-plan, vrais
+// téléchargements Chrome.
+// Lancer avec : npm install && npm run test:e2e   (Google Chrome doit être installé)
 import fs from 'node:fs';
-import path from 'node:path';
 import os from 'node:os';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer-core';
 import JSZip from 'jszip';
@@ -12,33 +13,47 @@ import JSZip from 'jszip';
 const EXT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const WORK = path.join(os.tmpdir(), 'bulk-attachments-e2e');
 const OUT = path.join(WORK, 'downloads');
-fs.rmSync(WORK, { recursive: true, force: true });
-fs.mkdirSync(OUT, { recursive: true });
+const PROFILE = path.join(WORK, 'profile');
 const CHROME = process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+const ID = 'dbangjhmkaaijopbjedmcpjnnhndngfl';
+
+fs.rmSync(WORK, { recursive: true, force: true });
+fs.mkdirSync(path.join(PROFILE, 'Default'), { recursive: true });
+fs.mkdirSync(OUT, { recursive: true });
+// Dossier de téléchargement du profil de test, sans fenêtre de confirmation.
+fs.writeFileSync(
+  path.join(PROFILE, 'Default', 'Preferences'),
+  JSON.stringify({ download: { default_directory: OUT, prompt_for_download: false, directory_upgrade: true } }),
+);
 
 const results = [];
 const check = (name, cond, extra = '') => {
   results.push({ name, ok: Boolean(cond) });
   console.log(`${cond ? 'OK  ' : 'FAIL'} ${name}${extra ? ` — ${extra}` : ''}`);
 };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// --- Serveur statique de l'extension ---------------------------------------
-const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.json': 'application/json' };
-const server = http.createServer((req, res) => {
-  const p = path.join(EXT, decodeURIComponent(new URL(req.url, 'http://x').pathname));
-  if (!p.startsWith(EXT) || !fs.existsSync(p) || fs.statSync(p).isDirectory()) return res.writeHead(404).end();
-  res.writeHead(200, { 'Content-Type': types[path.extname(p)] || 'application/octet-stream' }).end(fs.readFileSync(p));
-});
-await new Promise((r) => server.listen(0, '127.0.0.1', r));
-const base = `http://127.0.0.1:${server.address().port}`;
+async function waitForFiles(names, timeout = 20000) {
+  const end = Date.now() + timeout;
+  while (Date.now() < end) {
+    if (names.every((n) => fs.existsSync(path.join(OUT, n)))) return true;
+    await sleep(200);
+  }
+  return false;
+}
+const listOut = (dir = OUT, prefix = '') =>
+  fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+    e.isDirectory() ? listOut(path.join(dir, e.name), `${prefix}${e.name}/`) : [`${prefix}${e.name}`],
+  );
 
-// --- Fausse boîte Gmail ----------------------------------------------------
+// --- Fausse boîte Gmail (servie par le fetch simulé du moteur) ---------------
 const b64url = (s) => Buffer.from(s).toString('base64url');
 const day = (d) => String(new Date(d).getTime());
 const H = (from, subject) => [{ name: 'From', value: from }, { name: 'Subject', value: subject }];
 const att = (partId, filename, id, size, headers = [{ name: 'Content-Disposition', value: 'attachment' }]) => ({
   partId, filename, mimeType: 'application/octet-stream', headers, body: { attachmentId: id, size },
 });
+const MB = 1024 * 1024;
 const messages = {
   m1: { id: 'm1', threadId: 't1', internalDate: day('2024-03-15T10:00'), payload: { headers: H('Le Patron <boss@x.fr>', 'Facture mars'), parts: [
     { partId: '0', mimeType: 'text/html', filename: '', body: { size: 10, data: b64url('<b>hi</b>') } },
@@ -47,234 +62,282 @@ const messages = {
   ] } },
   m2: { id: 'm2', threadId: 't2', internalDate: day('2024-04-02T09:00'), payload: { headers: H('boss@x.fr', 'TR: Facture mars'), parts: [
     att('1', 'facture.pdf', 'A3', 17),
-    att('2', 'photo.jpg', 'A4', 30 * 1024 * 1024),
+    att('2', 'photo.jpg', 'A4', 30 * MB),
   ] } },
   m3: { id: 'm3', threadId: 't3', internalDate: day('2024-04-20T18:00'), payload: { headers: H('"Durand, Anne" <anne@y.fr>', 'Rapport / version finale'), parts: [
-    att('1', 'rapport:final?.docx', 'A5', 40 * 1024 * 1024),
+    att('1', 'rapport:final?.docx', 'A5', 40 * MB),
   ] } },
   m4: { id: 'm4', threadId: 't4', internalDate: day('2024-05-01T08:00'), payload: { headers: H('anne@y.fr', 'Export'), parts: [
     { partId: '1', filename: 'data.csv', mimeType: 'text/csv', headers: [], body: { size: 5, data: b64url('a;b;c') } },
     att('2', 'casse.pdf', 'BROKEN', 30),
   ] } },
 };
+const threads = { t1: ['m1'], t2: ['m2'], t3: ['m3'], t4: ['m4'] };
 const attContent = { A1: 'contenu facture A1', A3: 'contenu facture A1', A4: 'contenu photo A4', A5: 'contenu rapport A5', A2: 'logo' };
-const apiLog = [];
 
-function gmailResponse(url) {
-  const u = new URL(url);
-  const p = u.pathname.replace('/gmail/v1/users/me', '');
-  apiLog.push(p + u.search);
-  if (p === '/profile') return [200, { emailAddress: 'test@example.com', messagesTotal: 4321 }];
-  if (p === '/labels') return [200, { labels: [{ id: 'INBOX', type: 'system', name: 'INBOX' }, { id: 'Label_1', type: 'user', name: 'Factures' }, { id: 'CHAT', type: 'system', name: 'CHAT' }] }];
-  if (p === '/messages') {
-    return u.searchParams.get('pageToken')
-      ? [200, { messages: [{ id: 'm3' }, { id: 'm4' }] }]
-      : [200, { messages: [{ id: 'm1' }, { id: 'm2' }], nextPageToken: 'p2' }];
-  }
-  let m = /^\/messages\/(\w+)$/.exec(p);
-  if (m) return [200, messages[m[1]]];
-  m = /^\/messages\/(\w+)\/attachments\/(\w+)$/.exec(p);
-  if (m) return m[2] in attContent ? [200, { size: 1, data: b64url(attContent[m[2]]) }] : [404, { error: { code: 404, message: 'Not Found' } }];
-  return [404, {}];
+// Installé dans le document hors écran : remplace fetch pour gmail.googleapis.com.
+function installFakeGmail({ messages, threads, attContent, profileEmail }) {
+  const realFetch = globalThis.fetch;
+  globalThis.__apiLog = [];
+  const json = (status, body) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+  const b64 = (s) => btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  globalThis.fetch = async (input, init) => {
+    const url = new URL(String(input));
+    if (url.host !== 'gmail.googleapis.com') return realFetch(input, init);
+    if (init?.headers?.Authorization !== 'Bearer fake-token') return json(401, {});
+    const p = url.pathname.replace('/gmail/v1/users/me', '');
+    globalThis.__apiLog.push(p + url.search);
+    if (p === '/profile') return json(200, { emailAddress: profileEmail, messagesTotal: 4321 });
+    if (p === '/messages') {
+      return url.searchParams.get('pageToken')
+        ? json(200, { messages: [{ id: 'm3' }, { id: 'm4' }] })
+        : json(200, { messages: [{ id: 'm1' }, { id: 'm2' }], nextPageToken: 'p2' });
+    }
+    let m = /^\/threads\/(\w+)$/.exec(p);
+    if (m) return json(200, { id: m[1], messages: threads[m[1]].map((id) => messages[id]) });
+    m = /^\/messages\/(\w+)$/.exec(p);
+    if (m) return json(200, messages[m[1]]);
+    m = /^\/messages\/(\w+)\/attachments\/(\w+)$/.exec(p);
+    if (m) return m[2] in attContent ? json(200, { size: 1, data: b64(attContent[m[2]]) }) : json(404, { error: { code: 404 } });
+    return json(404, {});
+  };
 }
 
-// --- Navigateur ------------------------------------------------------------
+// --- Fausse page Gmail (classes et attributs relevés sur la vraie interface) --
+const GMAIL_URL = 'https://mail.google.com/mail/u/0/#advanced-search/attach_or_drive=true&query=facture+after%3A2022%2F01%2F01&isrefinement=true';
+const row = (id, subject) =>
+  `<tr class="zA yO"><td class="oZ-x3 xY aid"><div role="checkbox" aria-checked="false"></div></td>` +
+  `<td><span data-thread-id="#thread-f:${id}" data-legacy-thread-id="${id}">${subject}</span></td></tr>`;
+const GMAIL_HTML = `<!doctype html><html><head><meta charset="utf-8">
+<title>Résultats de recherche - test@example.com - Gmail</title></head><body>
+<div role="main">
+  <div gh="mtb"><div role="checkbox" aria-checked="false"></div></div>
+  <div id="banner" style="display:none"><span>Les 4 conversations correspondant à cette recherche sont sélectionnées.</span> <span role="link">Effacer la sélection</span></div>
+  <table class="F" id="list"><tbody>${row('t1', 'Facture mars')}${row('t2', 'TR: Facture mars')}${row('t3', 'Rapport')}${row('t4', 'Export')}</tbody></table>
+  <h2 class="hP" data-legacy-thread-id="t3" style="display:none">Rapport / version finale</h2>
+</div></body></html>`;
+
+// --- Navigateur --------------------------------------------------------------
 const browser = await puppeteer.launch({
   executablePath: CHROME,
   headless: true,
-  userDataDir: path.join(WORK, 'profile'),
-  args: ['--no-first-run', '--window-size=1400,1000'],
+  pipe: true,
+  enableExtensions: true,
+  userDataDir: PROFILE,
+  args: ['--no-first-run'],
 });
-const page = await browser.newPage();
-await page.setViewport({ width: 1400, height: 1000 });
-const consoleErrors = [];
-page.on('pageerror', (e) => consoleErrors.push(String(e)));
-// les 404 de la pièce jointe volontairement cassée (BROKEN) sont attendues
-page.on('console', (m) => m.type() === 'error' && !m.location()?.url?.includes('/attachments/BROKEN') && consoleErrors.push(`${m.text()} ${m.location()?.url}`));
+const extId = await browser.installExtension(EXT);
+check('Extension chargée avec l\'ID attendu', extId === ID, extId);
 
-const saved = [];
-await page.exposeFunction('__saveDownload', (filename, b64) => {
-  const dest = path.join(OUT, filename);
-  fs.mkdirSync(path.dirname(dest), { recursive: true });
-  fs.writeFileSync(dest, Buffer.from(b64, 'base64'));
-  saved.push(filename);
-});
+const swTarget = await browser.waitForTarget((t) => t.type() === 'service_worker' && t.url().includes(ID));
+const sw = await swTarget.worker();
+const errors = [];
+sw.on('console', (m) => m.type() === 'error' && errors.push(`sw: ${m.text()}`));
 
-const manifest = JSON.parse(fs.readFileSync(path.join(EXT, 'manifest.json'), 'utf8'));
-await page.evaluateOnNewDocument((manifest) => {
-  // stockage simulé persistant entre rechargements (comme chrome.storage.local)
-  const store = new Proxy({}, {
-    get: (_, k) => JSON.parse(localStorage.getItem(`s:${String(k)}`) ?? 'null'),
-    set: (_, k, v) => (localStorage.setItem(`s:${String(k)}`, JSON.stringify(v)), true),
-    has: (_, k) => localStorage.getItem(`s:${String(k)}`) !== null,
-  });
-  const listeners = [];
-  let nextId = 1;
-  window.chrome = {
-    runtime: { id: 'dbangjhmkaaijopbjedmcpjnnhndngfl', getManifest: () => manifest },
-    identity: {
-      getAuthToken: async () => ({ token: 'fake-token' }),
-      removeCachedAuthToken: async () => {},
-      clearAllCachedAuthTokens: async () => {},
-    },
-    storage: { local: {
-      get: async (k) => (k in store ? { [k]: structuredClone(store[k]) } : {}),
-      set: async (o) => Object.assign(store, structuredClone(o)),
-    } },
-    downloads: {
-      onChanged: { addListener: (f) => listeners.push(f), removeListener: (f) => listeners.splice(listeners.indexOf(f), 1) },
-      download: async ({ url, filename }) => {
-        if (filename.split('/').some((s) => s === '..' || /[<>:"|?*\\]/.test(s))) throw new Error('Invalid filename');
-        const buf = new Uint8Array(await (await fetch(url)).arrayBuffer());
-        let bin = '';
-        for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000));
-        await window.__saveDownload(filename, btoa(bin));
-        const id = nextId++;
-        setTimeout(() => [...listeners].forEach((f) => f({ id, state: { current: 'complete' } })), 10);
-        return id;
-      },
-    },
+// Jeton simulé : refusé en mode silencieux tant que l'utilisateur n'a pas cliqué « Se connecter ».
+await sw.evaluate(() => {
+  globalThis.__granted = false;
+  chrome.identity.getAuthToken = async ({ interactive }) => {
+    if (!interactive && !globalThis.__granted) throw new Error('OAuth2 not granted or revoked.');
+    globalThis.__granted = true;
+    return { token: 'fake-token' };
   };
-}, manifest);
-
-await page.setRequestInterception(true);
-page.on('request', (req) => {
-  const url = req.url();
-  if (!url.startsWith('https://gmail.googleapis.com/') && !url.startsWith('https://oauth2.googleapis.com/')) return req.continue();
-  const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'Authorization', 'Access-Control-Allow-Methods': 'GET,POST' };
-  if (req.method() === 'OPTIONS') return req.respond({ status: 204, headers: cors });
-  if (url.startsWith('https://oauth2')) return req.respond({ status: 200, headers: cors, body: '{}' });
-  const auth = req.headers().authorization;
-  if (auth !== 'Bearer fake-token') return req.respond({ status: 401, headers: cors, body: '{}' });
-  const [status, body] = gmailResponse(url);
-  req.respond({ status, headers: cors, contentType: 'application/json', body: JSON.stringify(body) });
+  chrome.identity.removeCachedAuthToken = async () => {};
+  chrome.identity.clearAllCachedAuthTokens = async () => {
+    globalThis.__granted = false;
+  };
 });
 
-const text = (sel) => page.$eval(sel, (e) => e.textContent.trim());
-const visible = (sel) => page.$eval(sel, (e) => !e.hidden && e.offsetParent !== null);
-const waitIdle = () => page.waitForFunction(() => document.querySelector('#progressBar').hidden, { timeout: 30000 });
+// Moteur hors écran créé d'avance pour y installer la fausse API avant toute requête.
+await sw.evaluate(() => ensureOffscreen());
+const offTarget = await browser.waitForTarget((t) => t.url().endsWith('/offscreen.html'));
+const off = await offTarget.asPage();
+off.on('console', (m) => m.type() === 'error' && !/404/.test(m.text()) && errors.push(`offscreen: ${m.text()}`));
+off.on('pageerror', (e) => errors.push(`offscreen: ${e}`));
+await off.evaluate(installFakeGmail, { messages, threads, attContent, profileEmail: 'test@example.com' });
+const apiLog = () => off.evaluate(() => globalThis.__apiLog.slice());
 
-// 1. Démarrage + connexion silencieuse
-await page.goto(`${base}/app.html?q=${encodeURIComponent('is:starred')}`);
-await page.waitForFunction(() => document.querySelector('#accountEmail').textContent.includes('@'), { timeout: 10000 });
-check('Connexion et profil affichés', (await text('#accountEmail')).includes('test@example.com'), await text('#accountEmail'));
-check('Bannière de configuration masquée (client_id renseigné)', !(await visible('#setupBanner')));
-const labelOpts = await page.$$eval('select[name=label] option', (os) => os.map((o) => o.textContent));
-check('Libellés chargés (système traduits, CHAT ignoré)', labelOpts.join('|') === 'Tous les e-mails|Boîte de réception|Factures', labelOpts.join('|'));
-check('Recherche Gmail reprise depuis ?q=', (await page.$eval('input[name=raw]', (e) => e.value)) === 'is:starred');
+// Onglet Gmail simulé.
+const gmail = await browser.newPage();
+await gmail.setRequestInterception(true);
+gmail.on('request', (req) =>
+  req.url().startsWith('https://mail.google.com/')
+    ? req.respond({ status: 200, contentType: 'text/html', body: GMAIL_HTML })
+    : req.continue(),
+);
+await gmail.goto(GMAIL_URL);
+const gmailTabId = await sw.evaluate(async () => (await chrome.tabs.query({ url: 'https://mail.google.com/*' }))[0].id);
 
-// 2. Recherche
-await page.type('input[name=from]', 'boss@x.fr');
-await page.$eval('input[name=after]', (e) => { e.value = '2024-01-01'; e.dispatchEvent(new Event('input', { bubbles: true })); });
-await page.select('select[name=label]', 'Label_1');
-const preview = await text('#queryPreview');
-check('Aperçu de la requête', /^has:attachment from:\(boss@x\.fr\) after:\d+ is:starred$/.test(preview), preview);
-await page.click('#btnSearch');
-await page.waitForFunction(() => !document.querySelector('#resultsCard').hidden, { timeout: 15000 });
-await waitIdle();
-const listCall = apiLog.find((l) => l.startsWith('/messages?'));
-const listParams = new URLSearchParams(listCall.split('?')[1]);
-check('Appel messages.list avec la requête et le libellé', listParams.get('q') === preview && listParams.get('labelIds') === 'Label_1', listCall);
-check('Pagination suivie (2 pages)', apiLog.filter((l) => l.startsWith('/messages?')).length === 2);
-const rows = await page.$$eval('#rows tr', (trs) => trs.map((tr) => ({
-  file: tr.querySelector('.c-file').textContent, checked: tr.querySelector('input').checked,
+const setGmail = (fn, ...args) => gmail.evaluate(fn, ...args);
+const checkRows = (ids) =>
+  setGmail((ids) => {
+    document.querySelectorAll('tr.zA').forEach((tr) => {
+      const id = tr.querySelector('[data-legacy-thread-id]').getAttribute('data-legacy-thread-id');
+      const on = ids.includes(id);
+      tr.querySelector('[role=checkbox]').setAttribute('aria-checked', String(on));
+      tr.classList.toggle('x7', on);
+    });
+  }, ids);
+
+let popup = null;
+async function openPopup(tabId = gmailTabId) {
+  if (popup && !popup.isClosed()) await popup.close();
+  popup = await browser.newPage();
+  await popup.setViewport({ width: 460, height: 640 });
+  popup.on('pageerror', (e) => errors.push(`popup: ${e}`));
+  popup.on('console', (m) => m.type() === 'error' && errors.push(`popup: ${m.text()}`));
+  await popup.goto(`chrome-extension://${ID}/popup.html?tab=${tabId}`);
+  return popup;
+}
+const text = (sel) => popup.$eval(sel, (e) => e.textContent.trim());
+const isShown = (sel) => popup.$eval(sel, (e) => !e.hidden && e.offsetParent !== null);
+const waitShown = (sel, timeout = 15000) =>
+  popup.waitForFunction((s) => { const e = document.querySelector(s); return e && !e.hidden && e.offsetParent !== null; }, { timeout }, sel);
+const rowNames = () => popup.$$eval('#rows li', (lis) => lis.map((li) => ({
+  name: li.querySelector('.name span').textContent, checked: li.querySelector('input').checked,
 })));
-check('6 pièces jointes trouvées, image intégrée exclue', rows.length === 6 && !rows.some((r) => r.file.startsWith('logo')), rows.map((r) => r.file).join(', '));
-const dupRows = rows.filter((r) => r.file.includes('doublon'));
-check('Doublon détecté et décoché (copie la plus récente)', dupRows.length === 1 && !dupRows[0].checked);
-check('Tri par date décroissante', rows[0].file.startsWith('data.csv') || rows[0].file.startsWith('casse.pdf'));
-const stats = await text('#stats');
-check('Statistiques', stats.includes('4 e-mails') && stats.includes('6 pièces jointes') && stats.includes('5 sélectionnées'), stats);
-check('Aucune bannière d\'erreur après recherche', !(await visible('#errorBanner')));
+async function setOption(name, value) {
+  const opened = await popup.$eval('#options', (d) => d.open);
+  if (!opened) await popup.click('#options summary');
+  await popup.$eval(`[name=${name}]`, (el, v) => {
+    if (el.type === 'checkbox') el.checked = v;
+    else el.value = v;
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  }, value);
+}
+const waitDone = () => waitShown('#result', 30000);
 
-// 3. Filtre texte + cases
-await page.type('#filterText', 'anne');
-const filtered = await page.$$eval('#rows tr', (t) => t.length);
-check('Filtre texte', filtered === 3, `${filtered} lignes`);
-await page.click('#btnSelectNone');
-check('Tout décocher (lignes filtrées seulement)', (await text('#stats')).includes('2 sélectionnées'), await text('#stats'));
-await page.click('#btnSelectAll');
-await page.$eval('#filterText', (e) => { e.value = ''; e.dispatchEvent(new Event('input')); });
-check('Tout cocher', (await text('#stats')).includes('5 sélectionnées'), await text('#stats'));
-await page.screenshot({ path: path.join(WORK, 'capture.png'), fullPage: true });
+// 1. Pas encore autorisé : la popup propose la connexion
+await checkRows(['t1', 't2']);
+await openPopup();
+await waitShown('#auth');
+check('Sans autorisation : bouton « Se connecter » affiché', await isShown('#btnConnect'));
 
-// 4. Téléchargement ZIP, rangé par expéditeur, avec index
-await page.select('select[name=format]', 'zip');
-await page.select('select[name=folderMode]', 'sender');
-await page.select('select[name=fileMode]', 'original');
-await page.$eval('input[name=baseName]', (e) => { e.value = 'TestZip'; });
-await page.click('#btnDownload');
-await page.waitForFunction(() => document.querySelector('#progressLabel').textContent.startsWith('Terminé'), { timeout: 30000 });
-await waitIdle();
-check('ZIP enregistré', saved.includes('TestZip.zip'), saved.join(', '));
-const zip = await JSZip.loadAsync(fs.readFileSync(path.join(OUT, 'TestZip.zip')));
+// 2. Connexion puis analyse automatique de la sélection
+await popup.click('#btnConnect');
+await waitShown('#list');
+check('Sélection lue dans Gmail', (await text('#sourceTitle')) === '2 conversations sélectionnées', await text('#sourceTitle'));
+check('Compte affiché', (await text('#account')) === 'test@example.com');
+let log = await apiLog();
+check('Seules les conversations cochées sont lues', log.filter((l) => l.startsWith('/threads/')).sort().join() === '/threads/t1?format=full,/threads/t2?format=full', log.join(' '));
+let rows = await rowNames();
+check('3 pièces jointes, image intégrée exclue', rows.length === 3 && !rows.some((r) => r.name.startsWith('logo')), rows.map((r) => r.name).join(', '));
+check('Doublon décoché', rows.filter((r) => r.name.includes('doublon')).every((r) => !r.checked));
+check('Bouton de téléchargement avec total', (await text('#btnDownload')) === 'Télécharger 2 fichiers (30 Mo)', await text('#btnDownload'));
+check('Aucun avertissement de compte', !(await isShown('#warning')));
+await popup.screenshot({ path: path.join(WORK, 'popup-selection.png') });
+
+// 3. ZIP rangé par expéditeur
+await setOption('format', 'zip');
+await setOption('folderMode', 'sender');
+await setOption('fileMode', 'original');
+await setOption('baseName', 'Selection');
+await popup.click('#btnDownload');
+await waitDone();
+check('ZIP enregistré par Chrome', await waitForFiles(['Selection.zip']));
+const zip = await JSZip.loadAsync(fs.readFileSync(path.join(OUT, 'Selection.zip')));
 const entries = Object.keys(zip.files).filter((n) => !zip.files[n].dir).sort();
-const expected = ['anne@y.fr/data.csv', 'anne@y.fr/rapport_final_.docx', 'boss@x.fr/facture.pdf', 'boss@x.fr/photo.jpg', 'index.csv'];
-check('Contenu du ZIP (dossiers + noms nettoyés, échec exclu)', JSON.stringify(entries) === JSON.stringify(expected), entries.join(', '));
-check('Contenu binaire correct', (await zip.file('boss@x.fr/facture.pdf').async('string')) === 'contenu facture A1'
-  && (await zip.file('anne@y.fr/data.csv').async('string')) === 'a;b;c');
-check('Date du fichier = date de l\'e-mail', zip.file('boss@x.fr/facture.pdf').date.getMonth() === 2);
-const idx = await zip.file('index.csv').async('string');
-check('Index CSV : BOM, échec signalé, lien Gmail', idx.startsWith('﻿') && /casse\.pdf.*Échec/.test(idx) && idx.includes('mail.google.com/mail/?authuser=test%40example.com#all/t1'));
-const err = (await visible('#errorBanner')) ? await text('#errorBanner') : '';
-check('Échec signalé à l\'utilisateur', err.includes('casse.pdf'), err.split('\n')[0]);
+check('Contenu du ZIP', JSON.stringify(entries) === JSON.stringify(['boss@x.fr/facture.pdf', 'boss@x.fr/photo.jpg', 'index.csv']), entries.join(', '));
+check('Contenu des fichiers', (await zip.file('boss@x.fr/facture.pdf').async('string')) === 'contenu facture A1');
+check('Message de fin', (await text('#result')).startsWith('Terminé : 2 fichiers enregistrés'), (await text('#result')).split('\n')[0]);
+check('Badge « OK » sur l\'icône', (await sw.evaluate(() => chrome.action.getBadgeText({}))) === 'OK');
 
-// 5. Fichiers séparés, rangés par mois, nom préfixé par la date
-await page.select('select[name=format]', 'files');
-check('Champs ZIP masqués en mode fichiers', !(await visible('input[name=maxZipMB]')));
-await page.select('select[name=folderMode]', 'month');
-await page.select('select[name=fileMode]', 'date');
-await page.$eval('input[name=baseName]', (e) => { e.value = 'TestFiles'; });
-saved.length = 0;
-await page.click('#btnDownload');
-await page.waitForFunction(() => document.querySelector('#progressLabel').textContent.startsWith('Terminé'), { timeout: 30000 });
-await waitIdle();
-const files = saved.slice().sort();
-const expFiles = ['TestFiles/2024-03/2024-03-15_facture.pdf', 'TestFiles/2024-04/2024-04-02_photo.jpg', 'TestFiles/2024-04/2024-04-20_rapport_final_.docx', 'TestFiles/2024-05/2024-05-01_data.csv', 'TestFiles/index.csv'];
-check('Fichiers séparés enregistrés', JSON.stringify(files) === JSON.stringify(expFiles), files.join(', '));
+// 4. Réouverture sur la même sélection : résultat conservé, pas de nouvelle analyse
+const before = (await apiLog()).length;
+await openPopup();
+await waitShown('#result');
+await sleep(500);
+check('Réouverture : état conservé sans nouvelle requête', (await apiLog()).length === before && (await isShown('#list')));
 
-// 6. Découpage en plusieurs ZIP (tailles déclarées : rapport 40 Mo, photo 30 Mo)
-await page.select('select[name=format]', 'zip');
-await page.select('select[name=folderMode]', 'none');
-await page.select('select[name=fileMode]', 'original');
-await page.$eval('input[name=baseName]', (e) => { e.value = 'TestSplit'; });
-await page.$eval('input[name=maxZipMB]', (e) => { e.value = '50'; });
-saved.length = 0;
-await page.click('#btnDownload');
-await page.waitForFunction(() => document.querySelector('#progressLabel').textContent.startsWith('Terminé'), { timeout: 30000 });
-await waitIdle();
-check('Découpage en 2 ZIP', JSON.stringify(saved.slice().sort()) === JSON.stringify(['TestSplit_partie-1-sur-2.zip', 'TestSplit_partie-2-sur-2.zip']), saved.join(', '));
+// 5. Conversation ouverte, téléchargement en fichiers séparés
+await checkRows([]);
+await setGmail(() => {
+  document.querySelector('#list').style.display = 'none';
+  document.querySelector('h2.hP').style.display = '';
+});
+await openPopup();
+await waitShown('#list');
+check('Conversation ouverte détectée', (await text('#sourceTitle')) === 'Conversation ouverte' && (await text('#sourceDetail')) === 'Rapport / version finale');
+rows = await rowNames();
+check('Pièce jointe de la conversation', rows.length === 1 && rows[0].name === 'rapport:final?.docx');
+await setOption('format', 'files');
+check('Options ZIP masquées en mode fichiers', !(await isShown('[name=maxZipMB]')));
+await setOption('folderMode', 'month');
+await setOption('fileMode', 'date');
+await setOption('baseName', 'Fichiers');
+await popup.click('#btnDownload');
+await waitDone();
+check('Fichiers séparés enregistrés (nom nettoyé, dossier par mois, index)',
+  await waitForFiles(['Fichiers/2024-04/2024-04-20_rapport_final_.docx', 'Fichiers/index.csv']), listOut().filter((f) => f.startsWith('Fichiers')).join(', '));
+
+// 6. Rien de coché : proposition d'analyser la vue, sans analyse automatique
+await setGmail(() => {
+  document.querySelector('#list').style.display = '';
+  document.querySelector('h2.hP').style.display = 'none';
+});
+await openPopup();
+await waitShown('#source');
+await sleep(500);
+check('Aucune sélection : titre et requête de la vue', (await text('#sourceTitle')) === 'Aucun e-mail coché' && (await text('#sourceDetail')).includes('facture after:2022/01/01'), await text('#sourceDetail'));
+check('Pas d\'analyse automatique', !(await isShown('#list')));
+await popup.click('#btnScan');
+await waitShown('#list');
+log = await apiLog();
+const listCall = log.find((l) => l.startsWith('/messages?'));
+check('Recherche lancée avec la requête de la vue Gmail', new URLSearchParams(listCall.split('?')[1]).get('q') === 'has:attachment facture after:2022/01/01', listCall);
+rows = await rowNames();
+check('6 pièces jointes sur toute la recherche (pagination suivie)', rows.length === 6, String(rows.length));
+
+// 7. Fermeture de la popup pendant le téléchargement : le travail continue
+await setOption('format', 'zip');
+await setOption('folderMode', 'none');
+await setOption('baseName', 'Arriere-plan');
+await setOption('maxZipMB', '50');
+await popup.click('#btnDownload');
+await popup.close();
+check('Popup fermée : les ZIP arrivent quand même (découpage en 2 parties)',
+  await waitForFiles(['Arriere-plan_partie-1-sur-2.zip', 'Arriere-plan_partie-2-sur-2.zip'], 30000));
 let total = 0;
-for (const z of saved) total += Object.keys((await JSZip.loadAsync(fs.readFileSync(path.join(OUT, z)))).files).filter((n) => n !== 'index.csv').length;
-check('Tous les fichiers répartis entre les parties', total === 4, String(total));
-saved.length = 0;
+for (const z of ['Arriere-plan_partie-1-sur-2.zip', 'Arriere-plan_partie-2-sur-2.zip']) {
+  total += Object.keys((await JSZip.loadAsync(fs.readFileSync(path.join(OUT, z)))).files).filter((n) => n !== 'index.csv').length;
+}
+check('Tous les fichiers répartis entre les parties, échec exclu', total === 4, String(total));
 
-// 7. Export CSV de la liste
-await page.click('#btnExportCsv');
-await new Promise((r) => setTimeout(r, 500));
-const csvName = saved.find((s) => s.startsWith('Gmail-liste'));
-const csv = csvName ? fs.readFileSync(path.join(OUT, csvName), 'utf8') : '';
-check('Export CSV de la liste', csv.split('\r\n').length === 6 && csv.includes('Expéditeur'), csvName);
+// 8. « Toutes les conversations de la recherche » sélectionnées
+await checkRows(['t1', 't2', 't3', 't4']);
+await setGmail(() => (document.querySelector('#banner').style.display = ''));
+await openPopup();
+await waitShown('#result');
+check('Sélection de toute la recherche détectée', (await text('#sourceTitle')) === 'Les 4 conversations de la recherche', await text('#sourceTitle'));
+check('Échec d\'une pièce jointe signalé', (await text('#result')).includes('casse.pdf'));
 
-// 8. Persistance des réglages
-await page.reload();
-await page.waitForFunction(() => document.querySelector('#accountEmail').textContent.includes('@'));
-const persisted = await page.evaluate(() => ({
-  from: document.querySelector('input[name=from]').value,
-  label: document.querySelector('select[name=label]').value,
-  folder: document.querySelector('select[name=folderMode]').value,
-}));
-check('Réglages conservés après rechargement', persisted.from === 'boss@x.fr' && persisted.label === 'Label_1' && persisted.folder === 'none', JSON.stringify(persisted));
+// 9. Compte Gmail différent du compte autorisé
+await setGmail(() => (document.title = 'Boîte de réception - autre@example.com - Gmail'));
+await openPopup();
+await waitShown('#warning');
+check('Avertissement si le compte Gmail diffère', (await text('#warning')).includes('autre@example.com'));
 
-// 9. Déconnexion
-await page.click('#btnDisconnect');
-await page.waitForFunction(() => document.querySelector('#accountEmail').textContent === 'Non connecté');
-check('Déconnexion', !(await visible('#btnDisconnect')) && (await visible('#btnConnect')));
+// 10. Onglet qui n'est pas Gmail
+// Sans permission sur un site, Chrome masque son adresse : l'onglet est repéré par différence.
+const tabIds = () => sw.evaluate(async () => (await chrome.tabs.query({})).map((t) => t.id));
+const knownTabs = await tabIds();
+const other = await browser.newPage();
+await other.goto('https://example.org/');
+const otherId = (await tabIds()).find((id) => !knownTabs.includes(id));
+await openPopup(otherId);
+await waitShown('#notGmail');
+check('Hors de Gmail : invitation à ouvrir Gmail', await isShown('#btnOpenGmail'));
 
-check('Aucune erreur JavaScript dans la console', consoleErrors.length === 0, consoleErrors.join(' | '));
+// 11. Déconnexion
+await openPopup();
+await waitShown('#btnSignOut');
+await popup.click('#btnSignOut');
+await popup.waitForFunction(() => document.querySelector('#account').textContent === '');
+check('Déconnexion', !(await isShown('#btnSignOut')));
+
+check('Aucune erreur JavaScript (popup, moteur, arrière-plan)', errors.length === 0, errors.join(' | '));
 
 await browser.close();
-server.close();
 const failed = results.filter((r) => !r.ok).length;
 console.log(`\n${results.length - failed}/${results.length} vérifications réussies`);
 process.exit(failed ? 1 : 0);
