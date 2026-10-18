@@ -1,6 +1,6 @@
 # Bulk Attachments — consignes pour Claude
 
-Extension Chrome (Manifest V3) qui télécharge en masse les pièces jointes Gmail via l'API Gmail officielle (lecture seule). Documentation complète : `docs/README.md`.
+Extension Chrome (Manifest V3) qui télécharge en masse les pièces jointes Gmail via l'API Gmail officielle (lecture seule). Documentation : `docs/README.md` (installation), `docs/UTILISATION.md` (usage, dépannage), `docs/ARCHITECTURE.md` (composants, messages, tests). Toute évolution du code met à jour le document concerné.
 
 ## Règles générales
 
