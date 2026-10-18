@@ -1,0 +1,15 @@
+{
+  "name": "bulk-attachments",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Extension Chrome de téléchargement en masse des pièces jointes Gmail",
+  "scripts": {
+    "test": "node --test tests/gmail.test.mjs",
+    "test:e2e": "node tests/e2e.mjs"
+  },
+  "devDependencies": {
+    "jszip": "3.10.1",
+    "puppeteer-core": "23.11.1"
+  }
+}

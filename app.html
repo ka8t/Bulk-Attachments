@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bulk Attachments</title>
+  <link rel="icon" href="icons/icon32.png">
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <img src="icons/icon48.png" alt="" width="28" height="28">
+      <h1>Bulk Attachments <span>pour Gmail</span></h1>
+    </div>
+    <div class="account">
+      <span id="accountEmail" class="muted">Non connecté</span>
+      <button id="btnConnect" class="btn">Se connecter</button>
+      <button id="btnDisconnect" class="btn ghost" hidden>Se déconnecter</button>
+    </div>
+  </header>
+
+  <main>
+    <section id="setupBanner" class="banner warn" hidden>
+      <strong>Configuration requise :</strong> renseignez votre identifiant client OAuth dans
+      <code>manifest.json</code> (clé <code>oauth2.client_id</code>), puis rechargez l'extension.
+      ID de cette extension, à déclarer dans Google Cloud : <code id="extId"></code>.
+      Procédure complète : <code>docs/README.md</code>.
+    </section>
+
+    <div id="errorBanner" class="banner error" hidden></div>
+
+    <section class="card">
+      <h2>1. Rechercher</h2>
+      <form id="searchForm" class="grid">
+        <label>De
+          <input name="from" type="text" placeholder="adresse ou nom de l'expéditeur">
+        </label>
+        <label>À
+          <input name="to" type="text" placeholder="destinataire">
+        </label>
+        <label>Objet contient
+          <input name="subject" type="text" placeholder="facture, devis…">
+        </label>
+        <label>Libellé
+          <select name="label"><option value="">Tous les e-mails</option></select>
+        </label>
+        <label>Du
+          <input name="after" type="date">
+        </label>
+        <label>Au (inclus)
+          <input name="before" type="date">
+        </label>
+        <label>Extensions
+          <input name="extensions" type="text" placeholder="pdf, docx, xlsx (vide = toutes)">
+        </label>
+        <label>Taille minimale de l'e-mail (Mo)
+          <input name="minSizeMB" type="number" min="0" step="1" placeholder="0">
+        </label>
+        <label class="span2">Requête Gmail avancée
+          <input name="raw" type="text" placeholder="syntaxe Gmail, ex. : is:starred -from:moi@exemple.fr">
+        </label>
+        <label>Nombre maximal d'e-mails
+          <input name="max" type="number" min="1" step="1" value="500">
+        </label>
+        <div class="checks span3">
+          <label class="check"><input name="includeInline" type="checkbox"> Inclure les images intégrées (logos, signatures)</label>
+          <label class="check"><input name="skipDuplicates" type="checkbox" checked> Désélectionner les doublons (même nom et même taille)</label>
+          <label class="check"><input name="includeSpamTrash" type="checkbox"> Inclure spam et corbeille</label>
+        </div>
+        <div class="actions span3">
+          <code id="queryPreview" class="query"></code>
+          <button id="btnSearch" class="btn primary" type="submit">Rechercher</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="card" id="resultsCard" hidden>
+      <div class="card-head">
+        <h2>2. Sélectionner</h2>
+        <div id="stats" class="muted"></div>
+      </div>
+      <div class="toolbar">
+        <input id="filterText" type="search" placeholder="Filtrer la liste (nom, expéditeur, objet)…">
+        <button id="btnSelectAll" class="btn ghost" type="button">Tout cocher</button>
+        <button id="btnSelectNone" class="btn ghost" type="button">Tout décocher</button>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th class="c-check"><input id="checkAll" type="checkbox" aria-label="Cocher les lignes affichées"></th>
+              <th>Fichier</th>
+              <th class="c-size">Taille</th>
+              <th>Expéditeur</th>
+              <th>Objet</th>
+              <th class="c-date">Date</th>
+            </tr>
+          </thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="card" id="downloadCard" hidden>
+      <h2>3. Télécharger</h2>
+      <form id="downloadForm" class="grid">
+        <label>Format
+          <select name="format">
+            <option value="zip">Archive ZIP</option>
+            <option value="files">Fichiers séparés</option>
+          </select>
+        </label>
+        <label>Ranger dans des dossiers
+          <select name="folderMode">
+            <option value="none">Aucun dossier</option>
+            <option value="sender">Par adresse de l'expéditeur</option>
+            <option value="senderName">Par nom de l'expéditeur</option>
+            <option value="month">Par mois (AAAA-MM)</option>
+            <option value="date">Par jour (AAAA-MM-JJ)</option>
+            <option value="type">Par type de fichier</option>
+            <option value="email">Un dossier par e-mail</option>
+          </select>
+        </label>
+        <label>Nom des fichiers
+          <select name="fileMode">
+            <option value="original">Nom d'origine</option>
+            <option value="date">Date + nom d'origine</option>
+            <option value="sender">Expéditeur + nom d'origine</option>
+            <option value="dateSender">Date + expéditeur + nom d'origine</option>
+          </select>
+        </label>
+        <label>Nom de l'archive / du dossier
+          <input name="baseName" type="text" placeholder="Gmail-pieces-jointes">
+        </label>
+        <label data-zip>Taille maximale par ZIP (Mo)
+          <input name="maxZipMB" type="number" min="50" step="50" value="1000">
+        </label>
+        <div class="checks">
+          <label class="check" data-zip><input name="compress" type="checkbox"> Compresser (plus lent, gain faible sur PDF/images)</label>
+          <label class="check"><input name="includeIndex" type="checkbox" checked> Ajouter un index CSV (date, expéditeur, objet, lien)</label>
+        </div>
+        <div class="actions span3">
+          <button id="btnExportCsv" class="btn ghost" type="button">Exporter la liste en CSV</button>
+          <button id="btnDownload" class="btn primary" type="submit">Télécharger la sélection</button>
+        </div>
+      </form>
+      <p class="muted small">Les fichiers sont enregistrés dans votre dossier de téléchargements Chrome.
+        Si l'option « Demander dans quel dossier enregistrer chaque fichier » est active dans Chrome,
+        désactivez-la avant un téléchargement en fichiers séparés.</p>
+    </section>
+  </main>
+
+  <footer id="progressBar" class="progress" hidden>
+    <div class="progress-text">
+      <span id="progressLabel">…</span>
+      <button id="btnCancel" class="btn ghost small" type="button">Annuler</button>
+    </div>
+    <div class="progress-track"><div id="progressFill" class="progress-fill"></div></div>
+  </footer>
+
+  <script src="lib/jszip.min.js"></script>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
